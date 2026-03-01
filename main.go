@@ -104,7 +104,7 @@ if results:
             out.append({
                 "outbound": {"price": r[0].price, "legs": [{"airline": l.airline.name, "flight_number": l.flight_number, "departure_airport": l.departure_airport.name, "arrival_airport": l.arrival_airport.name, "departure_datetime": str(l.departure_datetime), "arrival_datetime": str(l.arrival_datetime)} for l in r[0].legs]},
                 "return": {"price": r[1].price, "legs": [{"airline": l.airline.name, "flight_number": l.flight_number, "departure_airport": l.departure_airport.name, "arrival_airport": l.arrival_airport.name, "departure_datetime": str(l.departure_datetime), "arrival_datetime": str(l.arrival_datetime)} for l in r[1].legs]},
-                "total": r[0].price + r[1].price,
+                "total": r[1].price,
             })
         else:
             out.append({
