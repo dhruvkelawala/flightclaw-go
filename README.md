@@ -123,3 +123,7 @@ Flightclaw expands each city alias into one provider query per date:
 - Google Flights uses an undocumented internal endpoint, so availability can occasionally fail or change.
 
 A separate scheduled live smoke test searches a high-availability route each day. It is intentionally kept out of pull-request CI: its purpose is to detect breakage in the undocumented Google Flights payload without making upstream availability a merge gate.
+
+## License
+
+Flightclaw is available under the [MIT License](LICENSE).
