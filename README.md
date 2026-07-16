@@ -9,14 +9,14 @@ Flightclaw requires Go 1.25 or later and has no additional language runtime depe
 Build in the repository:
 
 ```bash
-go build -o flightclaw .
+go build -o flightclaw ./cmd/flightclaw
 ./flightclaw --help
 ```
 
-Or install it on your `GOBIN`/`GOPATH`:
+Or install it as `flightclaw` on your `GOBIN`/`GOPATH`:
 
 ```bash
-go install github.com/dhruvkelawala/flightclaw-go@latest
+go install github.com/dhruvkelawala/flightclaw-go/cmd/flightclaw@latest
 ```
 
 ## Usage
@@ -121,3 +121,5 @@ Flightclaw expands each city alias into one provider query per date:
 - Return and open-jaw totals are the sum of two independently searched one-way headline fares. They can differ from an airline's round-trip price.
 - Flightclaw links to Google Flights for booking/search continuation; it does not book or purchase travel.
 - Google Flights uses an undocumented internal endpoint, so availability can occasionally fail or change.
+
+A separate scheduled live smoke test searches a high-availability route each day. It is intentionally kept out of pull-request CI: its purpose is to detect breakage in the undocumented Google Flights payload without making upstream availability a merge gate.
