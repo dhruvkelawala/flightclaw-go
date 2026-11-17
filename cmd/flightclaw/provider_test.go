@@ -78,6 +78,31 @@ func TestGoogleFlightsSearchReportsProviderFailures(t *testing.T) {
 	}
 }
 
+func TestGoogleFlightsSearchIdentifiesRedirectedPages(t *testing.T) {
+	for _, tc := range []struct {
+		name, destination, want string
+	}{
+		{"consent", "https://consent.google.com/m?continue=fixture-query", "requires consent at consent.google.com"},
+		{"blocked", "https://www.google.com/sorry/index?continue=fixture-query", "blocked the request at /sorry"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &googleFlightsProvider{client: &http.Client{Transport: flightTransport(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == "/travel/flights" {
+					return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{tc.destination}}, Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("fixture-body")), Request: request}, nil
+			})}}
+			journeys, _, err := provider.SearchOneWay(context.Background(), LegQuery{Origins: []string{"LHR"}, Destinations: []string{"BOM"}, Date: "2027-02-11", Adults: 1})
+			if err == nil || !strings.Contains(err.Error(), tc.want) || len(journeys) != 0 {
+				t.Fatalf("want %q, got journeys=%v, err=%v", tc.want, journeys, err)
+			}
+			if strings.Contains(err.Error(), "fixture-query") || strings.Contains(err.Error(), "fixture-body") {
+				t.Fatalf("diagnostic exposed query or page contents: %v", err)
+			}
+		})
+	}
+}
+
 func TestConvertOffersIncludesEverySegmentAndRejectsMalformedOffers(t *testing.T) {
 	bst := time.FixedZone("BST", 3600)
 	cest := time.FixedZone("CEST", 7200)

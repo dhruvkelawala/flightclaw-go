@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/krisukox/google-flights-api/flights"
@@ -72,6 +73,16 @@ func (p *googleFlightsProvider) SearchOneWay(ctx context.Context, query LegQuery
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		return nil, nil, fmt.Errorf("Google Flights search page returned HTTP %d", response.StatusCode)
+	}
+	if response.Request != nil && response.Request.URL != nil {
+		finalURL := response.Request.URL
+		host := strings.ToLower(finalURL.Hostname())
+		if host == "consent.google.com" {
+			return nil, nil, fmt.Errorf("Google Flights requires consent at consent.google.com; flight data was not read")
+		}
+		if (host == "www.google.com" || host == "google.com") && (finalURL.Path == "/sorry" || strings.HasPrefix(finalURL.Path, "/sorry/")) {
+			return nil, nil, fmt.Errorf("Google Flights blocked the request at /sorry; flight data was not read")
+		}
 	}
 	const maxPageSize = 16 << 20
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxPageSize+1))
