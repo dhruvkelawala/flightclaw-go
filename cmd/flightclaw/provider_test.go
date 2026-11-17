@@ -1,12 +1,82 @@
 package main
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/krisukox/google-flights-api/flights"
 	"golang.org/x/text/currency"
 )
+
+type flightTransport func(*http.Request) (*http.Response, error)
+
+func (f flightTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestGoogleFlightsSearchReadsPublicPage(t *testing.T) {
+	page, err := os.ReadFile("testdata/search-page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &googleFlightsProvider{client: &http.Client{Transport: flightTransport(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.Host != "www.google.com" || request.URL.Query().Get("tfs") == "" || request.URL.Query().Get("curr") != "GBP" {
+			t.Errorf("not a public GBP search: %s %s", request.Method, request.URL)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(page)))}, nil
+	})}}
+	journeys, warnings, err := provider.SearchOneWay(context.Background(), LegQuery{Origins: []string{"LHR"}, Destinations: []string{"BOM"}, Date: "2027-02-11", Adults: 1})
+	if err != nil || len(warnings) != 0 || len(journeys) != 3 {
+		t.Fatalf("want 3 real fares from both groups; got %d, warnings=%v, err=%v", len(journeys), warnings, err)
+	}
+	if journeys[0].Price != 356 || journeys[1].Price != 412 || journeys[2].Price != 336 {
+		t.Fatalf("GBP prices = %v, %v, %v", journeys[0].Price, journeys[1].Price, journeys[2].Price)
+	}
+	if journeys[0].DurationMinutes != 850 || journeys[0].Stops != 1 || journeys[1].Stops != 0 || journeys[2].DurationMinutes != 1825 {
+		t.Fatalf("duration/stops lost: %#v", journeys)
+	}
+	connection := journeys[0].Segments[1]
+	if connection.FlightNumber != "GF 56" || connection.DepartureTime.Format(time.RFC3339) != "2027-02-11T23:00:00+03:00" || connection.ArrivalTime.Format(time.RFC3339) != "2027-02-12T05:10:00+05:30" {
+		t.Fatalf("connection/local times lost: %#v", connection)
+	}
+	if journeys[2].Segments[0].ArrivalTime.Format(time.RFC3339) != "2027-02-12T00:05:00+03:00" || journeys[2].Segments[1].ArrivalTime.Format(time.RFC3339) != "2027-02-13T04:00:00+05:30" {
+		t.Fatalf("omitted zero clock fields or overnight dates lost: %#v", journeys[2])
+	}
+}
+
+func TestGoogleFlightsSearchReportsProviderFailures(t *testing.T) {
+	page, err := os.ReadFile("testdata/search-page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{"rate limited", http.StatusTooManyRequests, "", "HTTP 429"},
+		{"missing data", http.StatusOK, "<html>Consent required</html>", "missing flight data"},
+		{"broken data", http.StatusOK, "AF_initDataCallback({key: 'ds:1', data:[broken], sideChannel: {}})", "invalid flight data"},
+		{"changed group", http.StatusOK, "AF_initDataCallback({key: 'ds:1', data:[null,null,{},null], sideChannel: {}})", "unexpected format"},
+		{"unpriced offers", http.StatusOK, strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(string(page), "[[null,356]]", "[[null,null]]"), "[[null,412]]", "[[null,null]]"), "[[null,336]]", "[[null,null]]"), "none could be decoded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &googleFlightsProvider{client: &http.Client{Transport: flightTransport(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+			})}}
+			journeys, _, err := provider.SearchOneWay(context.Background(), LegQuery{Origins: []string{"LHR"}, Destinations: []string{"BOM"}, Date: "2027-02-11", Adults: 1})
+			if err == nil || !strings.Contains(err.Error(), tc.want) || len(journeys) != 0 {
+				t.Fatalf("want error containing %q, got journeys=%v, err=%v", tc.want, journeys, err)
+			}
+		})
+	}
+}
 
 func TestConvertOffersIncludesEverySegmentAndRejectsMalformedOffers(t *testing.T) {
 	bst := time.FixedZone("BST", 3600)

@@ -120,9 +120,10 @@ Flightclaw expands each city alias into one provider query per date:
 - Results are live **headline fares** and can change between searches. They may exclude checked or cabin baggage, seat selection, payment, or other airline fees.
 - Return and open-jaw totals are the sum of two independently searched one-way headline fares. They can differ from an airline's round-trip price.
 - Flightclaw links to Google Flights for booking/search continuation; it does not book or purchase travel.
-- Google Flights uses an undocumented internal endpoint, so availability can occasionally fail or change.
+- Flightclaw reads the structured flight data embedded in Google's public search page. Google can change this format or block automated requests. HTTP failures, missing flight data and unreadable offers are reported as errors rather than as empty searches.
+- Searches with no matching outbound or return flights exit with status `1` and write an error to stderr, including with `--json`. Invalid arguments exit with status `2`; successful searches exit with status `0`.
 
-A separate scheduled live smoke test searches a high-availability route each day. It is intentionally kept out of pull-request CI: its purpose is to detect breakage in the undocumented Google Flights payload without making upstream availability a merge gate.
+A separate scheduled live smoke test searches a high-availability route each day. It is intentionally kept out of pull-request CI: its purpose is to detect breakage in the Google Flights page data without making upstream availability a merge gate.
 
 ## License
 
