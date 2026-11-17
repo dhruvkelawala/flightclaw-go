@@ -80,6 +80,20 @@ func TestRunExitCodesAndStreams(t *testing.T) {
 		{name: "total runtime failure", args: validArgs, factory: func() (FlightProvider, error) {
 			return runProvider{search: func(context.Context, LegQuery) ([]Journey, []string, error) { return nil, nil, errors.New("blocked") }}, nil
 		}, wantCode: 1, wantErr: "all outbound flight searches failed"},
+		{name: "empty outbound", args: validArgs, factory: func() (FlightProvider, error) {
+			return runProvider{search: func(context.Context, LegQuery) ([]Journey, []string, error) { return nil, nil, nil }}, nil
+		}, wantCode: 1, wantErr: "no outbound flights matched the search"},
+		{name: "empty outbound JSON", args: append(append([]string{}, validArgs...), "--json"), factory: func() (FlightProvider, error) {
+			return runProvider{search: func(context.Context, LegQuery) ([]Journey, []string, error) { return nil, nil, nil }}, nil
+		}, wantCode: 1, wantErr: "no outbound flights matched the search"},
+		{name: "empty return", args: append(append([]string{}, validArgs...), "--return", "2026-09-20"), factory: func() (FlightProvider, error) {
+			return runProvider{search: func(_ context.Context, query LegQuery) ([]Journey, []string, error) {
+				if query.Date == "2026-09-20" {
+					return nil, nil, nil
+				}
+				return []Journey{testJourney(query.Date, "LTN", "FCO", 25, 8)}, nil, nil
+			}}, nil
+		}, wantCode: 1, wantErr: "no return flights matched the search"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

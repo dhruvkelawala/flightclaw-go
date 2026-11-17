@@ -3,6 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/krisukox/google-flights-api/flights"
@@ -21,14 +25,10 @@ type FlightProvider interface {
 	SearchOneWay(context.Context, LegQuery) ([]Journey, []string, error)
 }
 
-type googleFlightsProvider struct{ session *flights.Session }
+type googleFlightsProvider struct{ client *http.Client }
 
 func newGoogleFlightsProvider() (FlightProvider, error) {
-	session, err := flights.New()
-	if err != nil {
-		return nil, fmt.Errorf("initialize Google Flights session: %w", err)
-	}
-	return &googleFlightsProvider{session: session}, nil
+	return &googleFlightsProvider{client: &http.Client{}}, nil
 }
 
 func flightArgs(query LegQuery) (flights.Args, error) {
@@ -52,16 +52,52 @@ func (p *googleFlightsProvider) SearchOneWay(ctx context.Context, query LegQuery
 	if err != nil {
 		return nil, nil, err
 	}
-	offers, _, err := p.session.GetOffers(ctx, args)
+	session := &flights.Session{}
+	searchURL, err := session.SerializeURL(ctx, args)
 	if err != nil {
 		return nil, nil, err
 	}
-	url, urlErr := p.session.SerializeURL(ctx, args)
-	journeys, warnings := convertOffers(offers, url)
-	if urlErr != nil {
-		warnings = append(warnings, fmt.Sprintf("booking URL unavailable: %v", urlErr))
+	u, err := url.Parse(searchURL)
+	if err != nil {
+		return nil, nil, err
 	}
-	return journeys, warnings, nil
+	u.Path = "/travel/flights"
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	response, err := p.client.Do(request)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fetch Google Flights search page: %w", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("Google Flights search page returned HTTP %d", response.StatusCode)
+	}
+	if response.Request != nil && response.Request.URL != nil {
+		finalURL := response.Request.URL
+		host := strings.ToLower(finalURL.Hostname())
+		if host == "consent.google.com" {
+			return nil, nil, fmt.Errorf("Google Flights requires consent at consent.google.com; flight data was not read")
+		}
+		if (host == "www.google.com" || host == "google.com") && (finalURL.Path == "/sorry" || strings.HasPrefix(finalURL.Path, "/sorry/")) {
+			return nil, nil, fmt.Errorf("Google Flights blocked the request at /sorry; flight data was not read")
+		}
+	}
+	const maxPageSize = 16 << 20
+	body, err := io.ReadAll(io.LimitReader(response.Body, maxPageSize+1))
+	if err != nil {
+		return nil, nil, fmt.Errorf("read Google Flights search page: %w", err)
+	}
+	if len(body) > maxPageSize {
+		return nil, nil, fmt.Errorf("Google Flights search page exceeds %d bytes", maxPageSize)
+	}
+	offers, warnings, err := parseGooglePage(body)
+	if err != nil {
+		return nil, nil, err
+	}
+	journeys, conversionWarnings := convertOffers(offers, u.String())
+	return journeys, append(warnings, conversionWarnings...), nil
 }
 
 func convertOffers(offers []flights.FullOffer, bookingURL string) ([]Journey, []string) {
