@@ -28,7 +28,14 @@ func TestGoogleFlightsSearchReadsPublicPage(t *testing.T) {
 		if request.Method != http.MethodGet || request.URL.Host != "www.google.com" || request.URL.Query().Get("tfs") == "" || request.URL.Query().Get("curr") != "GBP" {
 			t.Errorf("not a public GBP search: %s %s", request.Method, request.URL)
 		}
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(page)))}, nil
+		ua := request.Header.Get("User-Agent")
+		if ua == "" || strings.Contains(ua, "Go-http-client") || !strings.Contains(ua, "Mozilla/5.0") {
+			t.Errorf("expected browser User-Agent to avoid /travel/flights/unsupported, got %q", ua)
+		}
+		if request.Header.Get("Accept-Language") == "" {
+			t.Errorf("expected Accept-Language header")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(page))), Request: request}, nil
 	})}}
 	journeys, warnings, err := provider.SearchOneWay(context.Background(), LegQuery{Origins: []string{"LHR"}, Destinations: []string{"BOM"}, Date: "2027-02-11", Adults: 1})
 	if err != nil || len(warnings) != 0 || len(journeys) != 3 {
@@ -78,12 +85,103 @@ func TestGoogleFlightsSearchReportsProviderFailures(t *testing.T) {
 	}
 }
 
+func TestGoogleFlightsSearchFollowsConsentBypassRedirect(t *testing.T) {
+	page, err := os.ReadFile("testdata/search-page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hops []string
+	provider := &googleFlightsProvider{client: &http.Client{Transport: flightTransport(func(request *http.Request) (*http.Response, error) {
+		hops = append(hops, request.URL.Host+request.URL.Path)
+		switch {
+		case request.URL.Host == "www.google.com" && request.URL.Query().Get("ucbcb") == "":
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"https://consent.google.com/m?continue=" + request.URL.String() + "&gl=GB&pc=flt"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    request,
+			}, nil
+		case request.URL.Host == "consent.google.com":
+			return &http.Response{
+				StatusCode: http.StatusSeeOther,
+				Header:     http.Header{"Location": []string{"https://www.google.com/travel/flights?tfs=fixture&curr=GBP&hl=en&ucbcb=1"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    request,
+			}, nil
+		default:
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(page))), Request: request}, nil
+		}
+	})}}
+	journeys, warnings, err := provider.SearchOneWay(context.Background(), LegQuery{Origins: []string{"LHR"}, Destinations: []string{"BOM"}, Date: "2027-02-11", Adults: 1})
+	if err != nil || len(warnings) != 0 || len(journeys) != 3 {
+		t.Fatalf("want 3 fares across consent redirect; got %d, warnings=%v, err=%v", len(journeys), warnings, err)
+	}
+	if len(hops) != 3 || hops[1] != "consent.google.com/m" {
+		t.Fatalf("unexpected redirect hops: %v", hops)
+	}
+	if strings.Contains(journeys[0].BookingURL, "ucbcb=1") {
+		t.Fatalf("booking URL should remain clean: %q", journeys[0].BookingURL)
+	}
+}
+
+func TestGoogleFlightsSearchReportsMissingDataBodyPrefix(t *testing.T) {
+	unsupported, err := os.ReadFile("testdata/unsupported-page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	longBody := "<html><title>Before you continue</title>" + strings.Repeat("x", 600) + "TAIL_MARKER</html>"
+	for _, tc := range []struct {
+		name      string
+		body      string
+		wantParts []string
+		forbid    string
+	}{
+		{
+			name:      "unsupported fixture",
+			body:      string(unsupported),
+			wantParts: []string{"missing flight data (ds:1)", "https://www.google.com/travel/flights/unsupported"},
+		},
+		{
+			name:      "consent html",
+			body:      "  \n<html>\t<title>Before you continue to Google</title></html>\n",
+			wantParts: []string{"missing flight data (ds:1)", "<html> <title>Before you continue to Google</title></html>"},
+		},
+		{
+			name:      "empty body",
+			body:      "   \n\t  ",
+			wantParts: []string{"missing flight data (ds:1)", "(empty)"},
+		},
+		{
+			name:      "long body truncated",
+			body:      longBody,
+			wantParts: []string{"missing flight data (ds:1)", "<html><title>Before you continue</title>", "..."},
+			forbid:    "TAIL_MARKER",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := parseGooglePage([]byte(tc.body))
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+			for _, part := range tc.wantParts {
+				if !strings.Contains(err.Error(), part) {
+					t.Errorf("error %q missing %q", err.Error(), part)
+				}
+			}
+			if tc.forbid != "" && strings.Contains(err.Error(), tc.forbid) {
+				t.Errorf("error %q was not truncated (contained %q)", err.Error(), tc.forbid)
+			}
+		})
+	}
+}
+
 func TestGoogleFlightsSearchIdentifiesRedirectedPages(t *testing.T) {
 	for _, tc := range []struct {
 		name, destination, want string
 	}{
 		{"consent", "https://consent.google.com/m?continue=fixture-query", "requires consent at consent.google.com"},
 		{"blocked", "https://www.google.com/sorry/index?continue=fixture-query", "blocked the request at /sorry"},
+		{"unsupported", "https://www.google.com/travel/flights/unsupported?tfs=fixture-query", "unsupported browser at /travel/flights/unsupported"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			provider := &googleFlightsProvider{client: &http.Client{Transport: flightTransport(func(request *http.Request) (*http.Response, error) {

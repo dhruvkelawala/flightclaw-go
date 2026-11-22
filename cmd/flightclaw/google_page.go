@@ -6,19 +6,55 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"strings"
 	"time"
 	_ "time/tzdata"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/krisukox/google-flights-api/flights"
 	"github.com/krisukox/google-flights-api/iata"
 )
 
+const missingDataSnippetLimit = 400
+
 var googlePageData = regexp.MustCompile(`AF_initDataCallback\(\{\s*key:\s*['"]ds:1['"]\s*,[^<]*?\bdata:\s*`)
+
+func bodySnippet(body []byte) string {
+	trimmed := bytes.TrimLeftFunc(body, unicode.IsSpace)
+	if len(trimmed) == 0 {
+		return "(empty)"
+	}
+	var out strings.Builder
+	inSpace := false
+	for len(trimmed) > 0 {
+		r, size := utf8.DecodeRune(trimmed)
+		trimmed = trimmed[size:]
+		if unicode.IsSpace(r) {
+			inSpace = true
+			continue
+		}
+		if inSpace {
+			if out.Len()+1 > missingDataSnippetLimit {
+				out.WriteString("...")
+				return out.String()
+			}
+			out.WriteByte(' ')
+			inSpace = false
+		}
+		if out.Len()+utf8.RuneLen(r) > missingDataSnippetLimit {
+			out.WriteString("...")
+			return out.String()
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
+}
 
 func parseGooglePage(body []byte) ([]flights.FullOffer, []string, error) {
 	match := googlePageData.FindIndex(body)
 	if match == nil {
-		return nil, nil, fmt.Errorf("Google Flights search page is missing flight data (ds:1); a consent or blocked page may have been returned")
+		return nil, nil, fmt.Errorf("Google Flights search page is missing flight data (ds:1); response starts with: %q", bodySnippet(body))
 	}
 	var payload []json.RawMessage
 	if err := json.NewDecoder(bytes.NewReader(body[match[1]:])).Decode(&payload); err != nil || len(payload) < 4 {

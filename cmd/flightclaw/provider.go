@@ -27,6 +27,8 @@ type FlightProvider interface {
 
 type googleFlightsProvider struct{ client *http.Client }
 
+const googleFlightsUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
 func newGoogleFlightsProvider() (FlightProvider, error) {
 	return &googleFlightsProvider{client: &http.Client{}}, nil
 }
@@ -66,6 +68,8 @@ func (p *googleFlightsProvider) SearchOneWay(ctx context.Context, query LegQuery
 	if err != nil {
 		return nil, nil, err
 	}
+	request.Header.Set("User-Agent", googleFlightsUserAgent)
+	request.Header.Set("Accept-Language", "en-GB,en;q=0.9")
 	response, err := p.client.Do(request)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fetch Google Flights search page: %w", err)
@@ -82,6 +86,9 @@ func (p *googleFlightsProvider) SearchOneWay(ctx context.Context, query LegQuery
 		}
 		if (host == "www.google.com" || host == "google.com") && (finalURL.Path == "/sorry" || strings.HasPrefix(finalURL.Path, "/sorry/")) {
 			return nil, nil, fmt.Errorf("Google Flights blocked the request at /sorry; flight data was not read")
+		}
+		if (host == "www.google.com" || host == "google.com") && (finalURL.Path == "/travel/flights/unsupported" || strings.HasPrefix(finalURL.Path, "/travel/flights/unsupported/")) {
+			return nil, nil, fmt.Errorf("Google Flights rejected the client as an unsupported browser at /travel/flights/unsupported; flight data was not read")
 		}
 	}
 	const maxPageSize = 16 << 20
