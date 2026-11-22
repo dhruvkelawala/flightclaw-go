@@ -1,0 +1,72 @@
+# Live CLI search evidence — issue #5
+
+Command:
+  flightclaw --from LHR --to BOM --date 2027-02-11 --return 2027-02-27 --results 5
+
+## Before (base 2b1d222, Go default User-Agent: Go-http-client/2.0)
+
+HTTP trace:
+  GET https://www.google.com/travel/flights?tfs=...&curr=GBP&hl=en
+  -> 302 https://www.google.com/travel/flights/unsupported?tfs=...&curr=GBP&hl=en&ucpp=...
+  -> 200 OK (1,574,890 bytes, "Time for an upgrade / Looks like your browser needs a boost.", no ds:1)
+
+CLI error:
+  flightclaw: all outbound flight searches failed: LHR → BOM on 2027-02-11 failed: Google Flights search page is missing flight data (ds:1); a consent or blocked page may have been returned
+
+## After (head 7b50e54, browser User-Agent + Accept-Language)
+
+HTTP trace:
+  GET https://www.google.com/travel/flights?tfs=...&curr=GBP&hl=en
+  -> 302 https://consent.google.com/m?continue=...&gl=GB&m=0&pc=flt&cm=2&hl=en&src=1
+  -> 303 https://www.google.com/travel/flights?tfs=...&curr=GBP&hl=en&ucbcb=1
+  -> 200 OK (full ds:1 flight offers)
+
+CLI output (exit 0):
+Option 1: £542.00
+  Outbound — 30h 25m, 1 stop
+    Royal Jordanian RJ 112: LHR 2027-02-11 16:05 +00:00 → AMM 2027-02-12 00:05 +03:00 (5h 0m)
+    Royal Jordanian RJ 190: AMM 2027-02-12 20:20 +03:00 → BOM 2027-02-13 04:00 +05:30 (5h 10m)
+    Booking: https://www.google.com/travel/flights?tfs=GiASCjIwMjctMDItMTEoA2oHCAESA0xIUnIHCAESA0JPTUIBAUgBmAEC&curr=GBP&hl=en
+  Return — 21h 30m, 1 stop
+    Azerbaijan Airlines J2 60: BOM 2027-02-27 05:05 +05:30 → GYD 2027-02-27 08:55 +04:00 (5h 20m)
+    Azerbaijan Airlines J2 7: GYD 2027-02-27 19:05 +04:00 → LHR 2027-02-27 21:05 +00:00 (6h 0m)
+    Booking: https://www.google.com/travel/flights?tfs=GiASCjIwMjctMDItMjcoA2oHCAESA0JPTXIHCAESA0xIUkIBAUgBmAEC&curr=GBP&hl=en
+
+Option 2: £562.00
+  Outbound — 14h 10m, 1 stop
+    Gulf Air GF 2: LHR 2027-02-11 09:30 +00:00 → BAH 2027-02-11 19:10 +03:00 (6h 40m)
+    Gulf Air GF 56: BAH 2027-02-11 23:00 +03:00 → BOM 2027-02-12 05:10 +05:30 (3h 40m)
+    Booking: https://www.google.com/travel/flights?tfs=GiASCjIwMjctMDItMTEoA2oHCAESA0xIUnIHCAESA0JPTUIBAUgBmAEC&curr=GBP&hl=en
+  Return — 21h 30m, 1 stop
+    Azerbaijan Airlines J2 60: BOM 2027-02-27 05:05 +05:30 → GYD 2027-02-27 08:55 +04:00 (5h 20m)
+    Azerbaijan Airlines J2 7: GYD 2027-02-27 19:05 +04:00 → LHR 2027-02-27 21:05 +00:00 (6h 0m)
+    Booking: https://www.google.com/travel/flights?tfs=GiASCjIwMjctMDItMjcoA2oHCAESA0JPTXIHCAESA0xIUkIBAUgBmAEC&curr=GBP&hl=en
+
+Option 3: £563.00
+  Outbound — 26h 35m, 1 stop
+    Turkish Airlines TK 1934: LHR 2027-02-11 16:00 +00:00 → IST 2027-02-11 23:00 +03:00 (4h 0m)
+    IndiGo 6E 18: IST 2027-02-12 14:55 +03:00 → BOM 2027-02-13 00:05 +05:30 (6h 40m)
+    Booking: https://www.google.com/travel/flights?tfs=GiASCjIwMjctMDItMTEoA2oHCAESA0xIUnIHCAESA0JPTUIBAUgBmAEC&curr=GBP&hl=en
+  Return — 21h 30m, 1 stop
+    Azerbaijan Airlines J2 60: BOM 2027-02-27 05:05 +05:30 → GYD 2027-02-27 08:55 +04:00 (5h 20m)
+    Azerbaijan Airlines J2 7: GYD 2027-02-27 19:05 +04:00 → LHR 2027-02-27 21:05 +00:00 (6h 0m)
+    Booking: https://www.google.com/travel/flights?tfs=GiASCjIwMjctMDItMjcoA2oHCAESA0JPTXIHCAESA0xIUkIBAUgBmAEC&curr=GBP&hl=en
+
+Option 4: £565.00
+  Outbound — 30h 25m, 1 stop
+    Royal Jordanian RJ 112: LHR 2027-02-11 16:05 +00:00 → AMM 2027-02-12 00:05 +03:00 (5h 0m)
+    Royal Jordanian RJ 190: AMM 2027-02-12 20:20 +03:00 → BOM 2027-02-13 04:00 +05:30 (5h 10m)
+    Booking: https://www.google.com/travel/flights?tfs=GiASCjIwMjctMDItMTEoA2oHCAESA0xIUnIHCAESA0JPTUIBAUgBmAEC&curr=GBP&hl=en
+  Return — 21h 10m, 1 stop
+    Akasa Air QP 584: BOM 2027-02-27 22:50 +05:30 → AUH 2027-02-28 00:50 +04:00 (3h 30m)
+    Etihad EY 65: AUH 2027-02-28 10:40 +04:00 → LHR 2027-02-28 14:30 +00:00 (7h 50m)
+    Booking: https://www.google.com/travel/flights?tfs=GiASCjIwMjctMDItMjcoA2oHCAESA0JPTXIHCAESA0xIUkIBAUgBmAEC&curr=GBP&hl=en
+
+Option 5: £569.00
+  Outbound — 30h 25m, 1 stop
+    Royal Jordanian RJ 112: LHR 2027-02-11 16:05 +00:00 → AMM 2027-02-12 00:05 +03:00 (5h 0m)
+    Royal Jordanian RJ 190: AMM 2027-02-12 20:20 +03:00 → BOM 2027-02-13 04:00 +05:30 (5h 10m)
+    Booking: https://www.google.com/travel/flights?tfs=GiASCjIwMjctMDItMTEoA2oHCAESA0xIUnIHCAESA0JPTUIBAUgBmAEC&curr=GBP&hl=en
+  Return — 10h 30m, 0 stops
+    Virgin Atlantic VS 355: BOM 2027-02-27 10:40 +05:30 → LHR 2027-02-27 15:40 +00:00 (10h 30m)
+    Booking: https://www.google.com/travel/flights?tfs=GiASCjIwMjctMDItMjcoA2oHCAESA0JPTXIHCAESA0xIUkIBAUgBmAEC&curr=GBP&hl=en

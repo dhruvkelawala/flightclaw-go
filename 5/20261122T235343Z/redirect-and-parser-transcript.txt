@@ -1,0 +1,28 @@
+=== RUN   TestGoogleFlightsSearchReadsPublicPage
+--- PASS: TestGoogleFlightsSearchReadsPublicPage (0.00s)
+=== RUN   TestGoogleFlightsSearchFollowsConsentBypassRedirect
+--- PASS: TestGoogleFlightsSearchFollowsConsentBypassRedirect (0.00s)
+=== RUN   TestGoogleFlightsSearchReportsMissingDataBodyPrefix
+=== RUN   TestGoogleFlightsSearchReportsMissingDataBodyPrefix/unsupported_fixture
+=== RUN   TestGoogleFlightsSearchReportsMissingDataBodyPrefix/consent_html
+=== RUN   TestGoogleFlightsSearchReportsMissingDataBodyPrefix/empty_body
+=== RUN   TestGoogleFlightsSearchReportsMissingDataBodyPrefix/long_body_truncated
+=== RUN   TestGoogleFlightsSearchReportsMissingDataBodyPrefix/utf8_boundary_truncated_cleanly
+=== RUN   TestGoogleFlightsSearchReportsMissingDataBodyPrefix/space_before_multibyte_rune_at_boundary_omits_trailing_space
+--- PASS: TestGoogleFlightsSearchReportsMissingDataBodyPrefix (0.00s)
+    --- PASS: TestGoogleFlightsSearchReportsMissingDataBodyPrefix/unsupported_fixture (0.00s)
+    --- PASS: TestGoogleFlightsSearchReportsMissingDataBodyPrefix/consent_html (0.00s)
+    --- PASS: TestGoogleFlightsSearchReportsMissingDataBodyPrefix/empty_body (0.00s)
+    --- PASS: TestGoogleFlightsSearchReportsMissingDataBodyPrefix/long_body_truncated (0.00s)
+    --- PASS: TestGoogleFlightsSearchReportsMissingDataBodyPrefix/utf8_boundary_truncated_cleanly (0.00s)
+    --- PASS: TestGoogleFlightsSearchReportsMissingDataBodyPrefix/space_before_multibyte_rune_at_boundary_omits_trailing_space (0.00s)
+=== RUN   TestGoogleFlightsSearchIdentifiesRedirectedPages
+=== RUN   TestGoogleFlightsSearchIdentifiesRedirectedPages/consent
+=== RUN   TestGoogleFlightsSearchIdentifiesRedirectedPages/blocked
+=== RUN   TestGoogleFlightsSearchIdentifiesRedirectedPages/unsupported
+--- PASS: TestGoogleFlightsSearchIdentifiesRedirectedPages (0.00s)
+    --- PASS: TestGoogleFlightsSearchIdentifiesRedirectedPages/consent (0.00s)
+    --- PASS: TestGoogleFlightsSearchIdentifiesRedirectedPages/blocked (0.00s)
+    --- PASS: TestGoogleFlightsSearchIdentifiesRedirectedPages/unsupported (0.00s)
+PASS
+ok  	github.com/dhruvkelawala/flightclaw-go/cmd/flightclaw	0.210s
