@@ -5,9 +5,11 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/krisukox/google-flights-api/flights"
 	"golang.org/x/text/currency"
@@ -130,11 +132,13 @@ func TestGoogleFlightsSearchReportsMissingDataBodyPrefix(t *testing.T) {
 		t.Fatal(err)
 	}
 	longBody := "<html><title>Before you continue</title>" + strings.Repeat("x", 600) + "TAIL_MARKER</html>"
+	utf8BoundaryBody := strings.Repeat("a", 399) + "£TAIL"
+	spaceBeforeUTF8Body := strings.Repeat("a", 399) + " éTAIL"
 	for _, tc := range []struct {
 		name      string
 		body      string
 		wantParts []string
-		forbid    string
+		forbid    []string
 	}{
 		{
 			name:      "unsupported fixture",
@@ -155,21 +159,57 @@ func TestGoogleFlightsSearchReportsMissingDataBodyPrefix(t *testing.T) {
 			name:      "long body truncated",
 			body:      longBody,
 			wantParts: []string{"missing flight data (ds:1)", "<html><title>Before you continue</title>", "..."},
-			forbid:    "TAIL_MARKER",
+			forbid:    []string{"TAIL_MARKER"},
+		},
+		{
+			name:      "utf8 boundary truncated cleanly",
+			body:      utf8BoundaryBody,
+			wantParts: []string{"missing flight data (ds:1)", strings.Repeat("a", 399) + "..."},
+			forbid:    []string{"£", "TAIL"},
+		},
+		{
+			name:      "space before multibyte rune at boundary omits trailing space",
+			body:      spaceBeforeUTF8Body,
+			wantParts: []string{"missing flight data (ds:1)", strings.Repeat("a", 399) + "..."},
+			forbid:    []string{" ...", "é", "TAIL"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := parseGooglePage([]byte(tc.body))
+			provider := &googleFlightsProvider{client: &http.Client{Transport: flightTransport(func(request *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tc.body)), Request: request}, nil
+			})}}
+			_, _, err := provider.SearchOneWay(context.Background(), LegQuery{Origins: []string{"LHR"}, Destinations: []string{"BOM"}, Date: "2027-02-11", Adults: 1})
 			if err == nil {
 				t.Fatalf("expected error")
 			}
+			msg := err.Error()
+			if !utf8.ValidString(msg) {
+				t.Errorf("error is not valid UTF-8: %q", msg)
+			}
+			const marker = "response starts with: "
+			idx := strings.Index(msg, marker)
+			if idx < 0 {
+				t.Fatalf("error %q missing %q", msg, marker)
+			}
+			snippet, unquoteErr := strconv.Unquote(msg[idx+len(marker):])
+			if unquoteErr != nil {
+				t.Fatalf("unquote snippet from %q: %v", msg, unquoteErr)
+			}
+			if !utf8.ValidString(snippet) {
+				t.Errorf("snippet is not valid UTF-8: %q", snippet)
+			}
+			if len(snippet) > missingDataSnippetLimit+len("...") {
+				t.Errorf("snippet length = %d, want <= %d", len(snippet), missingDataSnippetLimit+len("..."))
+			}
 			for _, part := range tc.wantParts {
-				if !strings.Contains(err.Error(), part) {
-					t.Errorf("error %q missing %q", err.Error(), part)
+				if !strings.Contains(msg, part) {
+					t.Errorf("error %q missing %q", msg, part)
 				}
 			}
-			if tc.forbid != "" && strings.Contains(err.Error(), tc.forbid) {
-				t.Errorf("error %q was not truncated (contained %q)", err.Error(), tc.forbid)
+			for _, bad := range tc.forbid {
+				if strings.Contains(msg, bad) {
+					t.Errorf("error %q should not contain %q", msg, bad)
+				}
 			}
 		})
 	}

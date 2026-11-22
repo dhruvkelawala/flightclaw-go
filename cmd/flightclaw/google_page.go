@@ -34,17 +34,17 @@ func bodySnippet(body []byte) string {
 			inSpace = true
 			continue
 		}
+		spaceLen := 0
 		if inSpace {
-			if out.Len()+1 > missingDataSnippetLimit {
-				out.WriteString("...")
-				return out.String()
-			}
-			out.WriteByte(' ')
-			inSpace = false
+			spaceLen = 1
 		}
-		if out.Len()+utf8.RuneLen(r) > missingDataSnippetLimit {
+		if out.Len()+spaceLen+utf8.RuneLen(r) > missingDataSnippetLimit {
 			out.WriteString("...")
 			return out.String()
+		}
+		if inSpace {
+			out.WriteByte(' ')
+			inSpace = false
 		}
 		out.WriteRune(r)
 	}
