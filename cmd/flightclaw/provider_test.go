@@ -1,12 +1,245 @@
 package main
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/krisukox/google-flights-api/flights"
 	"golang.org/x/text/currency"
 )
+
+type flightTransport func(*http.Request) (*http.Response, error)
+
+func (f flightTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestGoogleFlightsSearchReadsPublicPage(t *testing.T) {
+	page, err := os.ReadFile("testdata/search-page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &googleFlightsProvider{client: &http.Client{Transport: flightTransport(func(request *http.Request) (*http.Response, error) {
+		if request.Method != http.MethodGet || request.URL.Host != "www.google.com" || request.URL.Query().Get("tfs") == "" || request.URL.Query().Get("curr") != "GBP" {
+			t.Errorf("not a public GBP search: %s %s", request.Method, request.URL)
+		}
+		ua := request.Header.Get("User-Agent")
+		if ua == "" || strings.Contains(ua, "Go-http-client") || !strings.Contains(ua, "Mozilla/5.0") {
+			t.Errorf("expected browser User-Agent to avoid /travel/flights/unsupported, got %q", ua)
+		}
+		if request.Header.Get("Accept-Language") == "" {
+			t.Errorf("expected Accept-Language header")
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(page))), Request: request}, nil
+	})}}
+	journeys, warnings, err := provider.SearchOneWay(context.Background(), LegQuery{Origins: []string{"LHR"}, Destinations: []string{"BOM"}, Date: "2027-02-11", Adults: 1})
+	if err != nil || len(warnings) != 0 || len(journeys) != 3 {
+		t.Fatalf("want 3 real fares from both groups; got %d, warnings=%v, err=%v", len(journeys), warnings, err)
+	}
+	if journeys[0].Price != 356 || journeys[1].Price != 412 || journeys[2].Price != 336 {
+		t.Fatalf("GBP prices = %v, %v, %v", journeys[0].Price, journeys[1].Price, journeys[2].Price)
+	}
+	if journeys[0].DurationMinutes != 850 || journeys[0].Stops != 1 || journeys[1].Stops != 0 || journeys[2].DurationMinutes != 1825 {
+		t.Fatalf("duration/stops lost: %#v", journeys)
+	}
+	connection := journeys[0].Segments[1]
+	if connection.FlightNumber != "GF 56" || connection.DepartureTime.Format(time.RFC3339) != "2027-02-11T23:00:00+03:00" || connection.ArrivalTime.Format(time.RFC3339) != "2027-02-12T05:10:00+05:30" {
+		t.Fatalf("connection/local times lost: %#v", connection)
+	}
+	if journeys[2].Segments[0].ArrivalTime.Format(time.RFC3339) != "2027-02-12T00:05:00+03:00" || journeys[2].Segments[1].ArrivalTime.Format(time.RFC3339) != "2027-02-13T04:00:00+05:30" {
+		t.Fatalf("omitted zero clock fields or overnight dates lost: %#v", journeys[2])
+	}
+}
+
+func TestGoogleFlightsSearchReportsProviderFailures(t *testing.T) {
+	page, err := os.ReadFile("testdata/search-page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{"rate limited", http.StatusTooManyRequests, "", "HTTP 429"},
+		{"missing data", http.StatusOK, "<html>Consent required</html>", "missing flight data"},
+		{"broken data", http.StatusOK, "AF_initDataCallback({key: 'ds:1', data:[broken], sideChannel: {}})", "invalid flight data"},
+		{"changed group", http.StatusOK, "AF_initDataCallback({key: 'ds:1', data:[null,null,{},null], sideChannel: {}})", "unexpected format"},
+		{"unpriced offers", http.StatusOK, strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(string(page), "[[null,356]]", "[[null,null]]"), "[[null,412]]", "[[null,null]]"), "[[null,336]]", "[[null,null]]"), "none could be decoded"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &googleFlightsProvider{client: &http.Client{Transport: flightTransport(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+			})}}
+			journeys, _, err := provider.SearchOneWay(context.Background(), LegQuery{Origins: []string{"LHR"}, Destinations: []string{"BOM"}, Date: "2027-02-11", Adults: 1})
+			if err == nil || !strings.Contains(err.Error(), tc.want) || len(journeys) != 0 {
+				t.Fatalf("want error containing %q, got journeys=%v, err=%v", tc.want, journeys, err)
+			}
+		})
+	}
+}
+
+func TestGoogleFlightsSearchFollowsConsentBypassRedirect(t *testing.T) {
+	page, err := os.ReadFile("testdata/search-page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var hops []string
+	provider := &googleFlightsProvider{client: &http.Client{Transport: flightTransport(func(request *http.Request) (*http.Response, error) {
+		hops = append(hops, request.URL.Host+request.URL.Path)
+		switch {
+		case request.URL.Host == "www.google.com" && request.URL.Query().Get("ucbcb") == "":
+			return &http.Response{
+				StatusCode: http.StatusFound,
+				Header:     http.Header{"Location": []string{"https://consent.google.com/m?continue=" + request.URL.String() + "&gl=GB&pc=flt"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    request,
+			}, nil
+		case request.URL.Host == "consent.google.com":
+			return &http.Response{
+				StatusCode: http.StatusSeeOther,
+				Header:     http.Header{"Location": []string{"https://www.google.com/travel/flights?tfs=fixture&curr=GBP&hl=en&ucbcb=1"}},
+				Body:       io.NopCloser(strings.NewReader("")),
+				Request:    request,
+			}, nil
+		default:
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(string(page))), Request: request}, nil
+		}
+	})}}
+	journeys, warnings, err := provider.SearchOneWay(context.Background(), LegQuery{Origins: []string{"LHR"}, Destinations: []string{"BOM"}, Date: "2027-02-11", Adults: 1})
+	if err != nil || len(warnings) != 0 || len(journeys) != 3 {
+		t.Fatalf("want 3 fares across consent redirect; got %d, warnings=%v, err=%v", len(journeys), warnings, err)
+	}
+	if len(hops) != 3 || hops[1] != "consent.google.com/m" {
+		t.Fatalf("unexpected redirect hops: %v", hops)
+	}
+	if strings.Contains(journeys[0].BookingURL, "ucbcb=1") {
+		t.Fatalf("booking URL should remain clean: %q", journeys[0].BookingURL)
+	}
+}
+
+func TestGoogleFlightsSearchReportsMissingDataBodyPrefix(t *testing.T) {
+	unsupported, err := os.ReadFile("testdata/unsupported-page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	longBody := "<html><title>Before you continue</title>" + strings.Repeat("x", 600) + "TAIL_MARKER</html>"
+	utf8BoundaryBody := strings.Repeat("a", 399) + "£TAIL"
+	spaceBeforeUTF8Body := strings.Repeat("a", 399) + " éTAIL"
+	for _, tc := range []struct {
+		name      string
+		body      string
+		wantParts []string
+		forbid    []string
+	}{
+		{
+			name:      "unsupported fixture",
+			body:      string(unsupported),
+			wantParts: []string{"missing flight data (ds:1)", "https://www.google.com/travel/flights/unsupported"},
+		},
+		{
+			name:      "consent html",
+			body:      "  \n<html>\t<title>Before you continue to Google</title></html>\n",
+			wantParts: []string{"missing flight data (ds:1)", "<html> <title>Before you continue to Google</title></html>"},
+		},
+		{
+			name:      "empty body",
+			body:      "   \n\t  ",
+			wantParts: []string{"missing flight data (ds:1)", "(empty)"},
+		},
+		{
+			name:      "long body truncated",
+			body:      longBody,
+			wantParts: []string{"missing flight data (ds:1)", "<html><title>Before you continue</title>", "..."},
+			forbid:    []string{"TAIL_MARKER"},
+		},
+		{
+			name:      "utf8 boundary truncated cleanly",
+			body:      utf8BoundaryBody,
+			wantParts: []string{"missing flight data (ds:1)", strings.Repeat("a", 399) + "..."},
+			forbid:    []string{"£", "TAIL"},
+		},
+		{
+			name:      "space before multibyte rune at boundary omits trailing space",
+			body:      spaceBeforeUTF8Body,
+			wantParts: []string{"missing flight data (ds:1)", strings.Repeat("a", 399) + "..."},
+			forbid:    []string{" ...", "é", "TAIL"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &googleFlightsProvider{client: &http.Client{Transport: flightTransport(func(request *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tc.body)), Request: request}, nil
+			})}}
+			_, _, err := provider.SearchOneWay(context.Background(), LegQuery{Origins: []string{"LHR"}, Destinations: []string{"BOM"}, Date: "2027-02-11", Adults: 1})
+			if err == nil {
+				t.Fatalf("expected error")
+			}
+			msg := err.Error()
+			if !utf8.ValidString(msg) {
+				t.Errorf("error is not valid UTF-8: %q", msg)
+			}
+			const marker = "response starts with: "
+			idx := strings.Index(msg, marker)
+			if idx < 0 {
+				t.Fatalf("error %q missing %q", msg, marker)
+			}
+			snippet, unquoteErr := strconv.Unquote(msg[idx+len(marker):])
+			if unquoteErr != nil {
+				t.Fatalf("unquote snippet from %q: %v", msg, unquoteErr)
+			}
+			if !utf8.ValidString(snippet) {
+				t.Errorf("snippet is not valid UTF-8: %q", snippet)
+			}
+			if len(snippet) > missingDataSnippetLimit+len("...") {
+				t.Errorf("snippet length = %d, want <= %d", len(snippet), missingDataSnippetLimit+len("..."))
+			}
+			for _, part := range tc.wantParts {
+				if !strings.Contains(msg, part) {
+					t.Errorf("error %q missing %q", msg, part)
+				}
+			}
+			for _, bad := range tc.forbid {
+				if strings.Contains(msg, bad) {
+					t.Errorf("error %q should not contain %q", msg, bad)
+				}
+			}
+		})
+	}
+}
+
+func TestGoogleFlightsSearchIdentifiesRedirectedPages(t *testing.T) {
+	for _, tc := range []struct {
+		name, destination, want string
+	}{
+		{"consent", "https://consent.google.com/m?continue=fixture-query", "requires consent at consent.google.com"},
+		{"blocked", "https://www.google.com/sorry/index?continue=fixture-query", "blocked the request at /sorry"},
+		{"unsupported", "https://www.google.com/travel/flights/unsupported?tfs=fixture-query", "unsupported browser at /travel/flights/unsupported"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			provider := &googleFlightsProvider{client: &http.Client{Transport: flightTransport(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == "/travel/flights" {
+					return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": []string{tc.destination}}, Body: io.NopCloser(strings.NewReader("")), Request: request}, nil
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("fixture-body")), Request: request}, nil
+			})}}
+			journeys, _, err := provider.SearchOneWay(context.Background(), LegQuery{Origins: []string{"LHR"}, Destinations: []string{"BOM"}, Date: "2027-02-11", Adults: 1})
+			if err == nil || !strings.Contains(err.Error(), tc.want) || len(journeys) != 0 {
+				t.Fatalf("want %q, got journeys=%v, err=%v", tc.want, journeys, err)
+			}
+			if strings.Contains(err.Error(), "fixture-query") || strings.Contains(err.Error(), "fixture-body") {
+				t.Fatalf("diagnostic exposed query or page contents: %v", err)
+			}
+		})
+	}
+}
 
 func TestConvertOffersIncludesEverySegmentAndRejectsMalformedOffers(t *testing.T) {
 	bst := time.FixedZone("BST", 3600)
